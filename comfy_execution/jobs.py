@@ -66,14 +66,22 @@ def is_previewable(media_type: str, item: dict) -> bool:
     return False
 
 
-def normalize_queue_item(item: tuple, status: str) -> dict:
-    """Convert queue item tuple to unified job dict.
+def normalize_queue_item(item, status: str) -> dict:
+    """Convert queue item (tuple OR dict) to unified job dict.
 
-    Supports BOTH old (5 element) and new fork formats (6+ elements).
+    This fork uses the modern dict-based queue format (priority, id, extra_data, etc.).
+    Old tuple format is kept for compatibility.
     """
-    priority = item[0]
-    prompt_id = item[1]
-    extra_data = item[3] if len(item) > 3 else {}
+    if isinstance(item, dict):
+        # NEW dict format used by this fork
+        priority = item.get("priority", 0)
+        prompt_id = item.get("id") or item.get("prompt_id")
+        extra_data = item.get("extra_data", {})
+    else:
+        # OLD tuple format fallback (5-element or 6+ element)
+        priority = item[0]
+        prompt_id = item[1]
+        extra_data = item[3] if len(item) > 3 else {}
 
     create_time, workflow_id = _extract_job_metadata(extra_data)
 
@@ -90,14 +98,21 @@ def normalize_queue_item(item: tuple, status: str) -> dict:
 def normalize_history_item(prompt_id: str, history_item: dict, include_outputs: bool = False) -> dict:
     """Convert history item dict to unified job dict.
 
-    Supports BOTH old (5 element) and new fork formats (6+ elements).
+    History items have the prompt as a tuple (or dict in newer formats).
+    Supports both old tuple and new dict queue formats.
     """
     prompt_tuple = history_item['prompt']
-    
-    priority = prompt_tuple[0]
-    extra_data = prompt_tuple[3] if len(prompt_tuple) > 3 else {}
-    
-    prompt = prompt_tuple[2] if include_outputs and len(prompt_tuple) > 2 else None
+
+    if isinstance(prompt_tuple, dict):
+        # Rare case where history also uses dict (future-proof)
+        priority = prompt_tuple.get("priority", 0)
+        extra_data = prompt_tuple.get("extra_data", {})
+        prompt = prompt_tuple.get("prompt") if include_outputs else None
+    else:
+        # Standard tuple format
+        priority = prompt_tuple[0]
+        extra_data = prompt_tuple[3] if len(prompt_tuple) > 3 else {}
+        prompt = prompt_tuple[2] if include_outputs and len(prompt_tuple) > 2 else None
 
     create_time, workflow_id = _extract_job_metadata(extra_data)
 
@@ -231,11 +246,11 @@ def get_job(prompt_id: str, running: list, queued: list, history: dict) -> Optio
         return normalize_history_item(prompt_id, history[prompt_id], include_outputs=True)
 
     for item in running:
-        if item[1] == prompt_id:
+        if (isinstance(item, dict) and item.get("id") == prompt_id) or (not isinstance(item, dict) and item[1] == prompt_id):
             return normalize_queue_item(item, JobStatus.IN_PROGRESS)
 
     for item in queued:
-        if item[1] == prompt_id:
+        if (isinstance(item, dict) and item.get("id") == prompt_id) or (not isinstance(item, dict) and item[1] == prompt_id):
             return normalize_queue_item(item, JobStatus.PENDING)
 
     return None
